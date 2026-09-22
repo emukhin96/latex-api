@@ -38,6 +38,7 @@ from config import (
     COMPILE_DIR,
     DEFAULT_ENGINE,
     ENGINES,
+    KEEP_FAILED_WORKDIRS,
     MAX_ASSETS_BYTES,
     MAX_PASSES,
     MAX_TEX_BYTES,
@@ -155,7 +156,8 @@ def compile_generic():
             return _error(422, str(exc), summary=summary, log=exc.log)
         pdf = pdf_path.read_bytes()
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        if not (KEEP_FAILED_WORKDIRS and not (workdir / "main.pdf").exists()):
+            shutil.rmtree(workdir, ignore_errors=True)
 
     elapsed = (datetime.now() - started).total_seconds()
     logger.info("[%s] %s ok: %d bytes in %.2fs", client, engine, len(pdf), elapsed)

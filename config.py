@@ -81,6 +81,8 @@ MAX_PASSES = 3
 MAX_TEX_BYTES = _env_int("LATEX_MAX_TEX_BYTES", 2 * 1024 * 1024)
 MAX_ASSETS_BYTES = _env_int("LATEX_MAX_ASSETS_BYTES", 25 * 1024 * 1024)
 MAX_TEAMS_PER_REQUEST = _env_int("LATEX_MAX_TEAMS", 100)
+# Отладка: LATEX_KEEP_FAILED=1 — не удалять рабочую папку упавшей сборки (посмотреть .log, картинки)
+KEEP_FAILED_WORKDIRS = _env_bool("LATEX_KEEP_FAILED", False)
 LOG_TAIL_CHARS = 8000  # сколько хвоста .log отдаём клиенту при ошибке компиляции
 
 # Параллельность: одновременно компилируется не больше N документов, остальные ждут слот

@@ -227,14 +227,25 @@ def run_engine(engine: str, workdir: Path, main_tex: str = "main.tex", passes: i
     return pdf
 
 
+_DRIVER_MARKERS = ("xdvipdfmx", "dvipdfmx", "driver return code", "** ERROR **", "** WARNING **")
+
+
 def _log_tail(log_file: Path, fallback: str) -> str:
+    """Хвост .log плюс — если ошибка пришла от драйвера (xdvipdfmx: шрифты, картинки) — хвост
+    stdout движка: драйвер пишет причину в терминал, а не в .log."""
     text = fallback
     try:
         if log_file.exists():
             text = log_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
         pass
-    return text[-LOG_TAIL_CHARS:]
+    tail = text[-LOG_TAIL_CHARS:]
+    if fallback and fallback is not text and any(m in fallback for m in _DRIVER_MARKERS):
+        driver = "\n".join(
+            line for line in fallback.splitlines() if any(m in line for m in _DRIVER_MARKERS)
+        )
+        tail += "\n--- driver (stdout) ---\n" + driver[-2000:]
+    return tail
 
 
 def tex_error_summary(log: str) -> str:
@@ -296,6 +307,7 @@ def compile_tex(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     final_pdf = COMPILE_DIR / f"{output_name}_{timestamp}.pdf"
     workdir = Path(tempfile.mkdtemp(prefix=f"{client_name()}-", dir=COMPILE_DIR))
+    keep = False
     try:
         (workdir / "main.tex").write_text(tex_content, encoding="utf-8")
         _write_legacy_assets(workdir, assets)
@@ -303,11 +315,15 @@ def compile_tex(
             pdf = run_engine(engine, workdir, "main.tex", passes=passes)
         except CompileError as exc:
             logger.error("%s failed for %s: %s", engine, output_name, tex_error_summary(exc.log))
+            if config.KEEP_FAILED_WORKDIRS:
+                logger.error("workdir kept for debugging: %s", workdir)
+                keep = True
             # хвост лога: фатальная ошибка в конце, а не предупреждения преамбулы
             raise RuntimeError(f"{engine} failed: {exc.log[-8000:]}") from exc
         shutil.move(str(pdf), final_pdf)
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        if not keep:
+            shutil.rmtree(workdir, ignore_errors=True)
     logger.info("PDF created: %s (%d bytes)", final_pdf.name, final_pdf.stat().st_size)
     return final_pdf
 
