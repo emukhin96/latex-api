@@ -27,6 +27,9 @@ RUN grep -ls 'fonts/type1' /etc/fonts/conf.d/* 2>/dev/null | xargs -r rm -f \
     && printf '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n  <dir>%s/fonts/opentype</dir>\n  <dir>%s/fonts/truetype</dir>\n</fontconfig>\n' "$dist" "$dist" \
        > /etc/fonts/conf.d/09-texlive.conf
 COPY deploy/fonts.conf /etc/fonts/conf.d/10-latex-api.conf
+# COPY сохраняет права исходника; из Dropbox/rsync файл приходит 600 — тогда fontconfig под latexapi
+# молча пропускает конфиг (и папку fonts/ с ним). Права выставляем явно.
+RUN chmod 644 /etc/fonts/conf.d/10-latex-api.conf /etc/fonts/conf.d/09-texlive.conf
 # Проверка на сборке: ни одного Type 1 в fontconfig, а CMU Sans Serif — OpenType
 RUN fc-cache -fs >/dev/null \
     && n="$(fc-list : file fontformat | grep -c 'Type 1' || true)" \
@@ -52,6 +55,9 @@ USER latexapi
 ENV HOME=/home/latexapi \
     OSFONTDIR=/opt/latex-api/fonts// \
     LATEX_API_HOME=/opt/latex-api
+# Под пользователем сервиса оба конфига fontconfig должны быть видны (иначе fonts/ не сканируется)
+RUN fc-conflist | grep -q 10-latex-api.conf && fc-conflist | grep -q 09-texlive.conf \
+    || { echo "!! конфиги fontconfig не читаются пользователем latexapi:"; fc-conflist; exit 1; }
 # Прогрев базы шрифтов LuaLaTeX и форматов: без этого первый запрос после запуска идёт минуты.
 RUN luaotfload-tool --update --force >/dev/null 2>&1 || true \
     && printf '\\documentclass{article}\\begin{document}warm-up\\end{document}\n' > /tmp/w.tex \

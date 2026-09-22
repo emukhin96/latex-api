@@ -9,7 +9,9 @@ HOST="${1:-chemolymp-demo}"
 APP_DIR="${APP_DIR:-/opt/latex-api}"
 cd "$(dirname "$0")/.."
 
-rsync -az --delete \
+# --chmod: в Dropbox файлы лежат с правами 600, а Docker COPY их сохраняет — конфиги в образе
+# должны читаться пользователем сервиса; исполняемые биты скриптам вернёт deploy.sh
+rsync -az --delete --chmod=D755,F644 \
   --exclude '.git' --exclude '.env' --exclude 'data/' --exclude 'compile/' --exclude 'logs/' \
   --exclude '.venv/' --exclude 'venv/' --exclude '__pycache__/' --exclude '.pytest_cache/' \
   --exclude '.DS_Store' \

@@ -227,7 +227,7 @@ def run_engine(engine: str, workdir: Path, main_tex: str = "main.tex", passes: i
     return pdf
 
 
-_DRIVER_MARKERS = ("xdvipdfmx", "dvipdfmx", "driver return code", "** ERROR **", "** WARNING **")
+_DRIVER_MARKERS = ("xdvipdfmx:", "dvipdfmx:", "driver return code", "** ERROR **", "** WARNING **")
 
 
 def _log_tail(log_file: Path, fallback: str) -> str:
@@ -240,7 +240,7 @@ def _log_tail(log_file: Path, fallback: str) -> str:
     except OSError:
         pass
     tail = text[-LOG_TAIL_CHARS:]
-    if fallback and fallback is not text and any(m in fallback for m in _DRIVER_MARKERS):
+    if fallback and fallback is not text and "driver return code" in fallback:
         driver = "\n".join(
             line for line in fallback.splitlines() if any(m in line for m in _DRIVER_MARKERS)
         )
