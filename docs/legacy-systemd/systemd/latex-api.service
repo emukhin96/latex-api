@@ -1,0 +1,36 @@
+[Unit]
+Description=LaTeX Compilation API Service
+After=network.target
+
+[Service]
+Type=simple
+User=latexapi
+Group=latexapi
+WorkingDirectory=/opt/latex-api
+Environment="PATH=/usr/local/texlive/2024/bin/x86_64-linux:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+
+# Если используется виртуальное окружение
+ExecStart=/opt/latex-api/venv/bin/python /opt/latex-api/app.py
+
+# Или если используется system Python
+# ExecStart=/usr/bin/python3 /opt/latex-api/app.py
+
+# Или через Gunicorn
+# ExecStart=/opt/latex-api/venv/bin/gunicorn -w 2 -b 127.0.0.1:8000 app:app
+
+Restart=always
+RestartSec=10
+
+# Ограничения ресурсов (опционально)
+LimitNOFILE=65536
+MemoryLimit=2G
+
+# Логирование
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=latex-api
+
+[Install]
+WantedBy=multi-user.target
+

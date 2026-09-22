@@ -1,0 +1,35 @@
+name: Deploy demo
+
+# После зелёного CI на main: код уезжает на демо-сервер chemolymp по rsync (deploy-ключ репозитория
+# на сервере не нужен) и там запускается scripts/deploy.sh. Секреты те же, что у chemolymp:
+# DEMO_SSH_HOST (77.232.132.139), DEMO_SSH_KEY (приватный ключ пользователя deploy).
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-latex-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    steps:
+      - uses: actions/checkout@v4
+      - name: SSH key
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEMO_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.DEMO_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: rsync + deploy.sh
+        run: |
+          rsync -az --delete \
+            --exclude '.git' --exclude '.env' --exclude 'data/' --exclude 'compile/' --exclude 'logs/' \
+            ./ "deploy@${{ secrets.DEMO_SSH_HOST }}:/opt/latex-api/"
+          ssh "deploy@${{ secrets.DEMO_SSH_HOST }}" 'cd /opt/latex-api && chmod +x scripts/*.sh && ./scripts/deploy.sh'

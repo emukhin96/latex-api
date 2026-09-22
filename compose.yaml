@@ -1,0 +1,49 @@
+# latex-api на демо-сервере chemolymp: docker compose up -d --build
+#
+# Наружу сервис не публикуется: HTTPS-терминатор — Caddy из стека chemolymp, который видит
+# контейнер по имени `latex-api` через общую внешнюю сеть `edge` (создаёт scripts/deploy.sh).
+# На localhost сервера порт ${LATEX_API_PORT:-8100} открыт для curl-проверок и healthcheck.
+name: latex-api
+
+services:
+  latex-api:
+    build:
+      context: .
+      args:
+        TEXLIVE_IMAGE: ${TEXLIVE_IMAGE:-texlive/texlive:latest}
+    image: latex-api:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:${LATEX_API_PORT:-8100}:8000"
+    volumes:
+      # данные живут вне образа и переживают пересборку; пути внутри — как на старом сервере
+      - ./data/fonts:/opt/latex-api/fonts:ro
+      - ./data/assets:/opt/latex-api/assets:ro
+      - ./data/table_signs:/opt/latex-api/table_signs:ro
+      - ./data/templates:/opt/latex-api/templates:ro
+      - compile:/opt/latex-api/compile
+    networks:
+      - default
+      - edge
+    # демо-сервер: 2 vCPU / 4 ГБ на всё; TeX редко ест больше 300–500 МБ на документ
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: 1.5
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  compile:

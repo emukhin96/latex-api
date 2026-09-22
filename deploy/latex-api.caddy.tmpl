@@ -1,0 +1,25 @@
+# Сайт latex-api для общего Caddy демо-сервера (стек chemolymp импортирует /etc/caddy/sites/*.caddy).
+# __DOMAIN__ подставляет scripts/deploy.sh из LATEX_DOMAIN в .env. Файл генерируется — не править руками.
+__DOMAIN__ {
+	encode zstd gzip
+
+	# пакеты chgkmsu на 100 бланков и ассеты сертификатов: тело до 64 МБ
+	request_body {
+		max_size 64MB
+	}
+
+	# таймаута на ответ upstream у Caddy по умолчанию нет — длинные компиляции проходят
+	reverse_proxy latex-api:8000 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

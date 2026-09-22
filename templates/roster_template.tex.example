@@ -1,0 +1,134 @@
+\documentclass[11pt]{article}
+
+\parindent=0cm
+\usepackage[12pt]{moresize}
+\usepackage[main=russian]{babel}
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures={TeX},Renderer=Basic}
+
+% Настройка шрифтов - ПРЯМЫЕ пути к файлам на сервере API
+% ОБНОВИТЕ ПУТИ ПОСЛЕ КОПИРОВАНИЯ ШАБЛОНА!
+% CMU (Computer Modern Unicode) для основного текста
+\setmainfont{cmun}[
+  Path=/opt/latex-api/fonts/CMU/,
+  Extension=.ttf,
+  UprightFont=*rm,
+  BoldFont=*bx,
+  ItalicFont=*ti,
+  BoldItalicFont=*bi
+]
+
+\setsansfont{cmun}[
+  Path=/opt/latex-api/fonts/CMU/,
+  Extension=.ttf,
+  UprightFont=*ss,
+  BoldFont=*sx
+]
+
+\setmonofont{cmun}[
+  Path=/opt/latex-api/fonts/CMU/,
+  Extension=.ttf,
+  UprightFont=*tt,
+  BoldFont=*tb,
+  ItalicFont=*ti
+]
+
+% Alias для текста документа
+\newfontfamily\cmserif{cmun}[
+  Path=/opt/latex-api/fonts/CMU/,
+  Extension=.ttf,
+  UprightFont=*rm,
+  BoldFont=*bx,
+  ItalicFont=*ti
+]
+
+% Circe для заголовков
+\newfontfamily\circe{Circe}[
+  Path=/opt/latex-api/fonts/Сirce/,
+  Extension=.ttf,
+  UprightFont=*-Regular,
+  BoldFont=*-Bold
+]
+\usepackage{pifont}
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\filledcheckbox}{\raisebox{-.25ex}{\framebox(10,10){\cmark}\quad}}
+\newcommand{\checkbox}{\raisebox{-.25ex}{\framebox(10,10){}\quad}}
+
+\usepackage{graphicx}
+\usepackage{tabularx, array}
+\usepackage[a5paper,landscape]{geometry}
+\usepackage{tikz}
+\geometry{left=1.2cm}
+\geometry{right=1.2cm}
+\geometry{top=0.5cm}
+\geometry{bottom=0.5cm}
+\usepackage{calc}
+\usepackage{xcolor}
+\usepackage{amssymb}
+\usetikzlibrary{math}
+\newlength{\spacewidth}
+\settowidth{\spacewidth}{ }
+
+\usepackage[datesep=., style=ddmmyyyy]{datetime2}
+\date{\DTMnow}
+\begin{document}
+
+\large
+\pagestyle{empty}
+
+% HEADER MACROS BOUND FROM CONTEXT
+\newcommand{\teamnumber}{ {{ team_number }} }
+\newcommand{\teamname}{ {{ team_name }} }
+\newcommand{\teamfaculty}{ {{ team_label }} }
+\newcommand{\tournamentname}{ {{ tournament_name }} }
+\newcommand{\tournamentplace}{ {{ tournament_place }} }
+\newcommand{\tournamentdate}{ {{ tournament_date }} }
+\newcommand{\teamplace}{ {{ team_place }} }
+\newcommand{\teamalert}{ {{ team_alert }} }
+\newcommand{\teamalertnote}{ {{ team_alert_note }} }
+\newcommand{\playersnumber}{ {{ players_number }} }
+\newcommand{\headernote}{ {{ header_badge }} }
+\newcommand{\checkboxesline}{ {{ checkboxes_line }} }
+
+\begin{tikzpicture}
+\draw[white,thin] (0,0) rectangle (\textwidth,2);
+\draw[black,thin,fill = gray!10!white] (0,0) rectangle (0.16\textwidth,2);
+\node[anchor=west, xshift=5pt, font=\circe\bfseries\LARGE] at (0.16\textwidth,1.3) {\teamname\teamalert};
+\node[anchor=east, xshift=5pt, font=\cmserif] at (\textwidth,1.2) {Игроков: \bfseries{\playersnumber}};
+\node[anchor=east, xshift=5pt, font=\cmserif] at (\textwidth,0.67) {\headernote};
+\node[anchor=west, xshift=5pt, font=\cmserif] at (0.16\textwidth,0.67) {\teamfaculty};
+\node[anchor=south, font=\small] at (0.08\textwidth,0) (teamplace) {\teamplace};
+\node[anchor=south, font=\circe\bfseries\Large] at (teamplace.north) {\scalebox{1.35}{\Huge \teamnumber}};
+\end{tikzpicture}
+
+\vspace{8mm}
+
+{\setlength{\parskip}{4pt}
+\begin{center}
+{\circe\bfseries {\huge \tournamentname}}
+
+{\large \cmserif \tournamentplace \quad • \quad \tournamentdate}
+\end{center}
+
+{\setlength{\parskip}{0pt}
+\small \cmserif{Если состав команды изменился, отредактируйте здесь. Можно вычеркнуть и/или добавить игроков. Максимум — {{ max_players }} человек, но одновременно не больше 6 игроков. Не забудьте сдать бланк, даже если изменений нет!}}
+
+\cmserif{\checkboxesline}
+
+{\cmserif
+\vspace{2mm}
+\renewcommand{\arraystretch}{1.5}
+\begin{tabularx}{\textwidth}{|c|c|X|l|}
+    \hline
+    № & {} & Фамилия, имя, отчество & Факультет \\ \hline
+    {% for player in players %}
+    {{ forloop.counter }} & {{ player.status }} & {{ player.fullname }} & {{ player.comment }} \\
+    \hline
+    {% endfor %}
+\end{tabularx}
+}
+
+\footnotesize\cmserif\teamalertnote
+
+\end{document}
+

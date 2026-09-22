@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.format]
+exclude = ["legacy.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I"]
+# legacy.py перенесён как есть из старого app.py: длинные строки и стиль не трогаем
+per-file-ignores = { "legacy.py" = ["E501", "E741", "I"] }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

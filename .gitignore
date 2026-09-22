@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+
+# Секреты и данные сервера (шрифты, фоны, шаблоны монтируются в контейнер из data/)
+.env
+data/
+
+# Временные файлы компиляции и логи
+compile/
+logs/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
