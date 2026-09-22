@@ -17,11 +17,15 @@ RUN apt-get update \
         python3 python3-venv python3-pip fontconfig fonts-paratype curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# fontconfig видит OpenType-шрифты TeX Live (по имени семейства) и папку fonts/ сервиса
-RUN conf="$(kpsewhich -var-value TEXMFSYSVAR)/fonts/conf/texlive-fontconfig.conf" \
-    && { [ -f "$conf" ] && cp "$conf" /etc/fonts/conf.d/09-texlive.conf || true; }
+# fontconfig видит шрифты TeX Live по имени семейства — но только OpenType/TrueType.
+# Штатный texlive-fontconfig.conf подключает и type1/: тогда fontspec для «CMU Sans Serif»
+# получает cmunss.pfb, а xdvipdfmx падает: «Error occurred while loading font …cmunss.pfb».
+RUN dist="$(kpsewhich -var-value TEXMFDIST)" \
+    && printf '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n  <dir>%s/fonts/opentype</dir>\n  <dir>%s/fonts/truetype</dir>\n</fontconfig>\n' "$dist" "$dist" \
+       > /etc/fonts/conf.d/09-texlive.conf
 COPY deploy/fonts.conf /etc/fonts/conf.d/10-latex-api.conf
-RUN fc-cache -fs >/dev/null
+RUN fc-cache -fs >/dev/null && fc-match "CMU Sans Serif" | grep -q '\.otf' \
+    || { echo "!! fontconfig отдаёт для CMU не OpenType:"; fc-match "CMU Sans Serif"; exit 1; }
 
 # Тот же путь, что на старом сервере: шаблоны chgkmsu ссылаются на /opt/latex-api/fonts/… напрямую.
 WORKDIR /opt/latex-api
