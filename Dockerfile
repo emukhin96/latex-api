@@ -20,12 +20,18 @@ RUN apt-get update \
 # fontconfig видит шрифты TeX Live по имени семейства — но только OpenType/TrueType.
 # Штатный texlive-fontconfig.conf подключает и type1/: тогда fontspec для «CMU Sans Serif»
 # получает cmunss.pfb, а xdvipdfmx падает: «Error occurred while loading font …cmunss.pfb».
-RUN dist="$(kpsewhich -var-value TEXMFDIST)" \
+# Базовый образ уже мог подключить texlive-fontconfig.conf под другим именем — убираем всё, что
+# ссылается на type1/, и пишем свой конфиг; deploy/fonts.conf дополнительно отсекает Type 1 по формату.
+RUN grep -ls 'fonts/type1' /etc/fonts/conf.d/* 2>/dev/null | xargs -r rm -f \
+    && dist="$(kpsewhich -var-value TEXMFDIST)" \
     && printf '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n  <dir>%s/fonts/opentype</dir>\n  <dir>%s/fonts/truetype</dir>\n</fontconfig>\n' "$dist" "$dist" \
        > /etc/fonts/conf.d/09-texlive.conf
 COPY deploy/fonts.conf /etc/fonts/conf.d/10-latex-api.conf
-RUN fc-cache -fs >/dev/null && fc-match "CMU Sans Serif" | grep -q '\.otf' \
-    || { echo "!! fontconfig отдаёт для CMU не OpenType:"; fc-match "CMU Sans Serif"; exit 1; }
+# Проверка на сборке: ни одного Type 1 в fontconfig, а CMU Sans Serif — OpenType
+RUN fc-cache -fs >/dev/null \
+    && n="$(fc-list : file fontformat | grep -c 'Type 1' || true)" \
+    && { [ "$n" = 0 ] || { echo "!! в fontconfig остались Type 1 шрифты ($n):"; fc-list : file fontformat | grep 'Type 1' | head; exit 1; }; } \
+    && { fc-match "CMU Sans Serif" : file | grep -q '\.otf' || { echo "!! CMU Sans Serif не OpenType:"; fc-match "CMU Sans Serif" : file; exit 1; }; }
 
 # Тот же путь, что на старом сервере: шаблоны chgkmsu ссылаются на /opt/latex-api/fonts/… напрямую.
 WORKDIR /opt/latex-api
