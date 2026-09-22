@@ -46,7 +46,23 @@ if [ "$ok" != 1 ]; then echo "!! /health не отвечает"; docker compose 
 curl -sS "http://127.0.0.1:$PORT/health"; echo
 
 DOMAIN="$(env_get LATEX_DOMAIN)"
-if [ -n "$DOMAIN" ] && [ -d "$CADDY_SITES_DIR" ]; then
+# Сайт Caddy включаем только когда DNS домена уже смотрит на этот сервер: иначе Caddy начнёт
+# запрашивать сертификат на чужой IP и упрётся в лимиты Let's Encrypt (см. chemolymp RUNBOOK §1.3).
+# Обойти проверку (например, DNS ещё не разъехался по кэшам): FORCE_CADDY_SITE=1 ./scripts/deploy.sh
+dns_ok=1
+if [ -n "$DOMAIN" ] && [ -z "${FORCE_CADDY_SITE:-}" ]; then
+  resolved="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')"
+  my_ips="$(hostname -I 2>/dev/null) $(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || true)"
+  dns_ok=0
+  for ip in $resolved; do
+    case " $my_ips " in *" $ip "*) dns_ok=1;; esac
+  done
+  if [ "$dns_ok" != 1 ]; then
+    echo "!! DNS: $DOMAIN → ${resolved:-<не резолвится>}, а этот сервер — $my_ips"
+    echo "   Сайт Caddy не настраиваю. Поправьте A-запись и повторите ./scripts/deploy.sh (или FORCE_CADDY_SITE=1)."
+  fi
+fi
+if [ -n "$DOMAIN" ] && [ -d "$CADDY_SITES_DIR" ] && [ "$dns_ok" = 1 ]; then
   echo "==> Caddy site: $DOMAIN → $CADDY_SITES_DIR/latex-api.caddy"
   sed "s/__DOMAIN__/$DOMAIN/g" deploy/latex-api.caddy.tmpl > "$CADDY_SITES_DIR/latex-api.caddy.tmp"
   mv -f "$CADDY_SITES_DIR/latex-api.caddy.tmp" "$CADDY_SITES_DIR/latex-api.caddy"
@@ -56,7 +72,7 @@ if [ -n "$DOMAIN" ] && [ -d "$CADDY_SITES_DIR" ]; then
     echo "!! не удалось перезагрузить Caddy ($CADDY_CONTAINER): проверьте, что стек chemolymp запущен"
     echo "   и что его compose.prod.yaml монтирует $CADDY_SITES_DIR (PR «latex-api on demo»)."
   fi
-else
+elif [ "$dns_ok" = 1 ]; then
   echo "!! LATEX_DOMAIN пуст или нет $CADDY_SITES_DIR — сайт Caddy не настроен (нужен scripts/server-prepare.sh от root)"
 fi
 echo "==> OK"
