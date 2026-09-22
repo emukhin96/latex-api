@@ -29,7 +29,7 @@ jobs:
           ssh-keyscan -H "${{ secrets.DEMO_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
       - name: rsync + deploy.sh
         run: |
-          rsync -az --delete --chmod=D755,F644 \
+          rsync -az --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
             --exclude '.git' --exclude '.env' --exclude 'data/' --exclude 'compile/' --exclude 'logs/' \
             ./ "deploy@${{ secrets.DEMO_SSH_HOST }}:/opt/latex-api/"
           ssh "deploy@${{ secrets.DEMO_SSH_HOST }}" 'cd /opt/latex-api && chmod +x scripts/*.sh && ./scripts/deploy.sh'
