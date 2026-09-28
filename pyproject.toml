@@ -1,6 +1,8 @@
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# архив инструкций старого systemd-сервера: не код сервиса, линтером не проверяем
+extend-exclude = ["docs/legacy-systemd"]
 
 [tool.ruff.format]
 exclude = ["legacy.py"]
