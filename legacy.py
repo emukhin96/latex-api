@@ -17,8 +17,10 @@ rate limit — по клиенту, а не по IP; компиляция идё
 занят), без shell-escape и в отдельной папке на документ (assets разных запросов не пересекаются).
 """
 import base64
-import hashlib
+import binascii
 import io
+import struct
+import uuid
 import re
 import textwrap
 from datetime import datetime
@@ -363,6 +365,28 @@ def compile_latex():
         }), 500
 
 
+# Шрифт табличек из запроса: не больше этого размера (TTF с кириллицей — сотни КБ)
+TABLE_SIGN_FONT_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _unregister_font(font_name: str) -> None:
+    """Убрать шрифт из глобальных реестров ReportLab: шрифты из запросов живут один запрос,
+    иначе разные font_base64 копились бы в памяти воркера."""
+    from reportlab.lib import fonts as rl_fonts
+    from reportlab.pdfbase import pdfmetrics as rl_pdfmetrics
+
+    font = rl_pdfmetrics._fonts.pop(font_name, None)
+    if font is None:
+        return
+    for face_name, face_font in list(rl_pdfmetrics._dynFaceNames.items()):
+        if face_font is font:
+            del rl_pdfmetrics._dynFaceNames[face_name]
+    family = font_name.lower()
+    for key in [k for k in rl_fonts._tt2ps_map if k[0] == family]:
+        del rl_fonts._tt2ps_map[key]
+    rl_fonts._ps2tt_map.pop(family, None)
+
+
 @bp.route('/api/v1/table-signs', methods=['POST'])
 def generate_table_signs():
     """
@@ -387,6 +411,7 @@ def generate_table_signs():
         teams_count: int
     """
     start_time = datetime.now()
+    custom_font_name = None
 
     try:
         if not check_api_key():
@@ -434,16 +459,21 @@ def generate_table_signs():
         # Font setup: шрифт из запроса (свой дизайн табличек) или PPNeueMachina с сервера
         font_b64 = data.get('font_base64')
         if font_b64:
-            font_bytes = base64.b64decode(font_b64)
-            # Имя по содержимому: один и тот же шрифт регистрируется в ReportLab один раз
-            font_name = 'SignFont-' + hashlib.sha1(font_bytes).hexdigest()[:16]
+            # Своё имя на каждый запрос: шрифт снимается с регистрации в finally,
+            # и параллельный запрос с тем же шрифтом не потеряет его посреди генерации
+            font_name = f'SignFont-{uuid.uuid4().hex}'
             try:
-                rl_pdfmetrics.getFont(font_name)
-            except KeyError:
-                try:
-                    rl_pdfmetrics.registerFont(rl_TTFont(font_name, io.BytesIO(font_bytes)))
-                except (rl_TTFError, ValueError) as e:
-                    return jsonify({'success': False, 'error': f'Bad font_base64: {e}'}), 400
+                if not isinstance(font_b64, str):
+                    raise TypeError('must be a base64 string')
+                if len(font_b64) > TABLE_SIGN_FONT_MAX_BYTES * 4 // 3 + 4:
+                    raise ValueError(f'font is larger than {TABLE_SIGN_FONT_MAX_BYTES // (1024 * 1024)} MB')
+                font_bytes = base64.b64decode(font_b64, validate=True)
+                font = rl_TTFont(font_name, io.BytesIO(font_bytes))
+                rl_pdfmetrics.registerFont(font)
+                custom_font_name = font_name
+            except (binascii.Error, TypeError, ValueError, struct.error, IndexError, KeyError,
+                    rl_TTFError) as e:
+                return jsonify({'success': False, 'error': f'Bad font_base64: {e}'}), 400
         else:
             font_name = "PPNeueMachina"
             font_path = FONTS_DIR / 'PPNeueMachina' / 'PPNeueMachina-Ultrabold.ttf'
@@ -623,6 +653,10 @@ def generate_table_signs():
     except Exception as e:
         logger.error(f"Table signs error: {type(e).__name__}: {e}", exc_info=True)
         return jsonify({'success': False, 'error': f'Internal server error: {str(e)}'}), 500
+
+    finally:
+        if custom_font_name:
+            _unregister_font(custom_font_name)
 
 
 @bp.route('/api/v1/compile-roster', methods=['POST'])

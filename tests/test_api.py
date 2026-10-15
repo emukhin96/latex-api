@@ -373,3 +373,38 @@ def test_table_signs_bad_font(client):
                     headers={"Authorization": f"Bearer {KEY_A}"})
     assert r.status_code == 400
     assert "font_base64" in r.get_json()["error"]
+
+
+@pytest.mark.parametrize("font_b64", ["not base64 !!!", 12345])
+def test_table_signs_bad_font_base64(client, font_b64):
+    payload = {
+        "teams": [{"number": 1, "name": "Team"}],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": font_b64,
+    }
+    r = client.post("/api/v1/table-signs", json=payload,
+                    headers={"Authorization": f"Bearer {KEY_A}"})
+    assert r.status_code == 400
+    assert "font_base64" in r.get_json()["error"]
+
+
+def test_table_signs_font_not_kept_in_reportlab_registry(client):
+    import reportlab
+    from reportlab.lib import fonts as rl_fonts
+    from reportlab.pdfbase import pdfmetrics
+
+    font_path = os.path.join(os.path.dirname(reportlab.__file__), "fonts", "Vera.ttf")
+    with open(font_path, "rb") as f:
+        font_b64 = base64.b64encode(f.read()).decode()
+    payload = {
+        "teams": [{"number": 1, "name": "Team"}],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": font_b64,
+    }
+    for _ in range(2):
+        r = client.post("/api/v1/table-signs", json=payload,
+                        headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"})
+        assert r.status_code == 200
+    assert not [n for n in pdfmetrics._fonts if n.startswith("SignFont-")]
+    assert not [k for k in rl_fonts._ps2tt_map if k.startswith("signfont-")]
+    assert not [f for f in pdfmetrics._dynFaceNames.values() if f.fontName.startswith("SignFont-")]
