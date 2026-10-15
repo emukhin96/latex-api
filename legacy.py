@@ -17,6 +17,7 @@ rate limit — по клиенту, а не по IP; компиляция идё
 занят), без shell-escape и в отдельной папке на документ (assets разных запросов не пересекаются).
 """
 import base64
+import hashlib
 import io
 import re
 import textwrap
@@ -377,6 +378,7 @@ def generate_table_signs():
         text_box: list of 4 floats [x1, y1, x2, y2] (optional)
         text_color_rgb: list of 3 floats (optional)
         max_font_size: int (optional)
+        font_base64: str (optional, base64 encoded TTF; по умолчанию PPNeueMachina Ultrabold с сервера)
 
     Response JSON:
         success: bool
@@ -424,25 +426,37 @@ def generate_table_signs():
                 }), 404
             template_bytes = template_path.read_bytes()
 
-        # Font setup
-        font_name = "PPNeueMachina"
-        font_path = FONTS_DIR / 'PPNeueMachina' / 'PPNeueMachina-Ultrabold.ttf'
-        if not font_path.exists():
-            return jsonify({
-                'success': False,
-                'error': f'Font not found at {font_path}. '
-                         'Place PPNeueMachina-Ultrabold.ttf in fonts/PPNeueMachina/'
-            }), 404
-
         from reportlab.pdfgen import canvas as rl_canvas
         from reportlab.pdfbase import pdfmetrics as rl_pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont as rl_TTFont
+        from reportlab.pdfbase.ttfonts import TTFont as rl_TTFont, TTFError as rl_TTFError
         from reportlab.pdfbase.pdfmetrics import stringWidth as rl_stringWidth
 
-        try:
-            rl_pdfmetrics.getFont(font_name)
-        except KeyError:
-            rl_pdfmetrics.registerFont(rl_TTFont(font_name, str(font_path)))
+        # Font setup: шрифт из запроса (свой дизайн табличек) или PPNeueMachina с сервера
+        font_b64 = data.get('font_base64')
+        if font_b64:
+            font_bytes = base64.b64decode(font_b64)
+            # Имя по содержимому: один и тот же шрифт регистрируется в ReportLab один раз
+            font_name = 'SignFont-' + hashlib.sha1(font_bytes).hexdigest()[:16]
+            try:
+                rl_pdfmetrics.getFont(font_name)
+            except KeyError:
+                try:
+                    rl_pdfmetrics.registerFont(rl_TTFont(font_name, io.BytesIO(font_bytes)))
+                except (rl_TTFError, ValueError) as e:
+                    return jsonify({'success': False, 'error': f'Bad font_base64: {e}'}), 400
+        else:
+            font_name = "PPNeueMachina"
+            font_path = FONTS_DIR / 'PPNeueMachina' / 'PPNeueMachina-Ultrabold.ttf'
+            if not font_path.exists():
+                return jsonify({
+                    'success': False,
+                    'error': f'Font not found at {font_path}. '
+                             'Place PPNeueMachina-Ultrabold.ttf in fonts/PPNeueMachina/'
+                }), 404
+            try:
+                rl_pdfmetrics.getFont(font_name)
+            except KeyError:
+                rl_pdfmetrics.registerFont(rl_TTFont(font_name, str(font_path)))
 
         ASCENT_RATIO = 0.75
         DESCENT_RATIO = 0.25

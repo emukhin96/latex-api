@@ -320,3 +320,56 @@ def test_unknown_endpoint_is_json_404(client):
     assert resp.status_code == 404 and resp.get_json()["error"] == "Endpoint not found"
     resp = client.get("/api/v1/compile")
     assert resp.status_code == 405 and resp.is_json
+
+
+def _blank_pdf(width=842, height=596):
+    import io
+
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(width, height))
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def test_table_signs_custom_template_and_font(client):
+    import io
+
+    import PyPDF2
+    import reportlab
+
+    font_path = os.path.join(os.path.dirname(reportlab.__file__), "fonts", "Vera.ttf")
+    with open(font_path, "rb") as f:
+        font_b64 = base64.b64encode(f.read()).decode()
+    payload = {
+        "teams": [
+            {"number": 1, "name": "Short"},
+            {"number": 2, "name": "A rather long team name for wrapping"},
+        ],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": font_b64,
+        "text_box": [95, 18, 746, 142],
+        "max_font_size": 60,
+    }
+    r = client.post("/api/v1/table-signs", json=payload,
+                    headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"})
+    assert r.status_code == 200, r.data[:500]
+    reader = PyPDF2.PdfReader(io.BytesIO(r.data))
+    assert len(reader.pages) == 2
+    fonts = reader.pages[0]["/Resources"]["/Font"]
+    # В PDF вшит шрифт из запроса (Bitstream Vera), а не PPNeueMachina сервера
+    assert any("Vera" in str(fonts[k].get_object()["/BaseFont"]) for k in fonts)
+
+
+def test_table_signs_bad_font(client):
+    payload = {
+        "teams": [{"number": 1, "name": "Team"}],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": base64.b64encode(b"not a font").decode(),
+    }
+    r = client.post("/api/v1/table-signs", json=payload,
+                    headers={"Authorization": f"Bearer {KEY_A}"})
+    assert r.status_code == 400
+    assert "font_base64" in r.get_json()["error"]
