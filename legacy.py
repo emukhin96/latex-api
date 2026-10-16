@@ -17,7 +17,10 @@ rate limit — по клиенту, а не по IP; компиляция идё
 занят), без shell-escape и в отдельной папке на документ (assets разных запросов не пересекаются).
 """
 import base64
+import binascii
 import io
+import struct
+import uuid
 import re
 import textwrap
 from datetime import datetime
@@ -362,6 +365,28 @@ def compile_latex():
         }), 500
 
 
+# Шрифт табличек из запроса: не больше этого размера (TTF с кириллицей — сотни КБ)
+TABLE_SIGN_FONT_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _register_request_font(font_name: str, font) -> None:
+    """Шрифт из запроса — только в pdfmetrics._fonts под своим именем, мимо registerFont:
+    тот ищет уже известный шрифт по PostScript-имени (_dynFaceNames) и при совпадении
+    молча отдал бы под font_name чужой объект (например, серверный PPNeueMachina).
+    Канвасу и stringWidth хватает getFont(font_name)."""
+    from reportlab.pdfbase import pdfmetrics as rl_pdfmetrics
+
+    rl_pdfmetrics._fonts[font_name] = font
+
+
+def _unregister_font(font_name: str) -> None:
+    """Шрифт из запроса живёт один запрос, иначе разные font_base64 копились бы
+    в памяти воркера."""
+    from reportlab.pdfbase import pdfmetrics as rl_pdfmetrics
+
+    rl_pdfmetrics._fonts.pop(font_name, None)
+
+
 @bp.route('/api/v1/table-signs', methods=['POST'])
 def generate_table_signs():
     """
@@ -377,6 +402,7 @@ def generate_table_signs():
         text_box: list of 4 floats [x1, y1, x2, y2] (optional)
         text_color_rgb: list of 3 floats (optional)
         max_font_size: int (optional)
+        font_base64: str (optional, base64 encoded TTF; по умолчанию PPNeueMachina Ultrabold с сервера)
 
     Response JSON:
         success: bool
@@ -385,6 +411,7 @@ def generate_table_signs():
         teams_count: int
     """
     start_time = datetime.now()
+    custom_font_name = None
 
     try:
         if not check_api_key():
@@ -424,25 +451,44 @@ def generate_table_signs():
                 }), 404
             template_bytes = template_path.read_bytes()
 
-        # Font setup
-        font_name = "PPNeueMachina"
-        font_path = FONTS_DIR / 'PPNeueMachina' / 'PPNeueMachina-Ultrabold.ttf'
-        if not font_path.exists():
-            return jsonify({
-                'success': False,
-                'error': f'Font not found at {font_path}. '
-                         'Place PPNeueMachina-Ultrabold.ttf in fonts/PPNeueMachina/'
-            }), 404
-
         from reportlab.pdfgen import canvas as rl_canvas
         from reportlab.pdfbase import pdfmetrics as rl_pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont as rl_TTFont
+        from reportlab.pdfbase.ttfonts import TTFont as rl_TTFont, TTFError as rl_TTFError
         from reportlab.pdfbase.pdfmetrics import stringWidth as rl_stringWidth
 
-        try:
-            rl_pdfmetrics.getFont(font_name)
-        except KeyError:
-            rl_pdfmetrics.registerFont(rl_TTFont(font_name, str(font_path)))
+        # Font setup: шрифт из запроса (свой дизайн табличек) или PPNeueMachina с сервера
+        font_b64 = data.get('font_base64')
+        if font_b64:
+            # Своё имя на каждый запрос: шрифт снимается с регистрации в finally,
+            # и параллельный запрос с тем же шрифтом не потеряет его посреди генерации
+            font_name = f'SignFont-{uuid.uuid4().hex}'
+            try:
+                if not isinstance(font_b64, str):
+                    raise TypeError('must be a base64 string')
+                # Переносы строк (base64 по 76 символов, MIME) допустимы, как и в template_base64
+                font_b64 = ''.join(font_b64.split())
+                if len(font_b64) > TABLE_SIGN_FONT_MAX_BYTES * 4 // 3 + 4:
+                    max_mb = TABLE_SIGN_FONT_MAX_BYTES // (1024 * 1024)
+                    raise ValueError(f'font is larger than {max_mb} MB')
+                font_bytes = base64.b64decode(font_b64, validate=True)
+                _register_request_font(font_name, rl_TTFont(font_name, io.BytesIO(font_bytes)))
+                custom_font_name = font_name
+            except (binascii.Error, TypeError, ValueError, struct.error, IndexError, KeyError,
+                    rl_TTFError) as e:
+                return jsonify({'success': False, 'error': f'Bad font_base64: {e}'}), 400
+        else:
+            font_name = "PPNeueMachina"
+            font_path = FONTS_DIR / 'PPNeueMachina' / 'PPNeueMachina-Ultrabold.ttf'
+            if not font_path.exists():
+                return jsonify({
+                    'success': False,
+                    'error': f'Font not found at {font_path}. '
+                             'Place PPNeueMachina-Ultrabold.ttf in fonts/PPNeueMachina/'
+                }), 404
+            try:
+                rl_pdfmetrics.getFont(font_name)
+            except KeyError:
+                rl_pdfmetrics.registerFont(rl_TTFont(font_name, str(font_path)))
 
         ASCENT_RATIO = 0.75
         DESCENT_RATIO = 0.25
@@ -512,6 +558,11 @@ def generate_table_signs():
         for chunk_idx in range(0, len(teams), chunk_size):
             teams_chunk = teams[chunk_idx:chunk_idx + chunk_size]
             writer = PyPDF2.PdfWriter()
+            # PdfWriter помнит перенесённые объекты по id(reader): если временный reader
+            # соберёт GC, следующий получит тот же id, и в страницу попадут объекты
+            # чужой команды (шрифт с чужими кодами — «каша» вместо названия) или merge
+            # упадёт. Поэтому все reader'ы чанка живут, пока чанк не записан.
+            readers = []
 
             for team in teams_chunk:
                 team_name = team.get('name', '').strip()
@@ -520,12 +571,14 @@ def generate_table_signs():
 
                 try:
                     base_reader = PyPDF2.PdfReader(io.BytesIO(template_bytes))
+                    readers.append(base_reader)
                     page = base_reader.pages[0]
                     pw = float(page.mediabox.width)
                     ph = float(page.mediabox.height)
 
-                    overlay_buf = make_overlay(pw, ph, team_name)
-                    page.merge_page(PyPDF2.PdfReader(overlay_buf).pages[0])
+                    overlay_reader = PyPDF2.PdfReader(make_overlay(pw, ph, team_name))
+                    readers.append(overlay_reader)
+                    page.merge_page(overlay_reader.pages[0])
 
                     step1_buf = io.BytesIO()
                     w1 = PyPDF2.PdfWriter()
@@ -534,6 +587,7 @@ def generate_table_signs():
                     step1_buf.seek(0)
 
                     rotated_reader = PyPDF2.PdfReader(step1_buf)
+                    readers.append(rotated_reader)
                     rp = rotated_reader.pages[0]
                     rw, rh = float(rp.mediabox.width), float(rp.mediabox.height)
                     t = PyPDF2.Transformation().translate(tx=-rw / 2, ty=-rh / 2).rotate(180).translate(tx=rw / 2, ty=rh / 2)
@@ -541,15 +595,17 @@ def generate_table_signs():
                     if "/Rotate" in rp:
                         del rp["/Rotate"]
 
-                    overlay_buf2 = make_overlay(rw, rh, team_name)
-                    rp.merge_page(PyPDF2.PdfReader(overlay_buf2).pages[0])
+                    overlay_reader2 = PyPDF2.PdfReader(make_overlay(rw, rh, team_name))
+                    readers.append(overlay_reader2)
+                    rp.merge_page(overlay_reader2.pages[0])
 
                     writer.add_page(rp)
                     logger.info(f"✓ Table sign for team #{team.get('number', '?')} '{team_name}'")
 
                 except Exception as e:
+                    # Не пропускаем команду молча: PDF без части табличек хуже ошибки
                     logger.error(f"Failed for team '{team_name}': {e}")
-                    continue
+                    raise RuntimeError(f"table sign for team {team_name!r} failed: {e}") from e
 
             if len(writer.pages) == 0:
                 continue
@@ -609,6 +665,10 @@ def generate_table_signs():
     except Exception as e:
         logger.error(f"Table signs error: {type(e).__name__}: {e}", exc_info=True)
         return jsonify({'success': False, 'error': f'Internal server error: {str(e)}'}), 500
+
+    finally:
+        if custom_font_name:
+            _unregister_font(custom_font_name)
 
 
 @bp.route('/api/v1/compile-roster', methods=['POST'])

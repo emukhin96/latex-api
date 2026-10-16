@@ -64,6 +64,8 @@ curl -sS https://latex.emukhin.ru/api/v1/compile -H "Authorization: Bearer $KEY"
   (egormath шлёт так картинки задач, `egorbeamer.sty`, шрифты Inter). Необязательные поля запроса
   `engine`/`passes` меняют движок и число прогонов. Ошибка: `500 {"error": "… <хвост лога>", "log": …}`.
 - `POST /api/v1/table-signs` — таблички ReportLab поверх `table_signs/default_template.pdf` (JSON или `Accept: application/pdf`).
+  Свой дизайн — в запросе: `template_base64` (PDF-фон), `font_base64` (TTF; без него — PPNeueMachina Ultrabold
+  из `fonts/`), `text_box`, `text_color_rgb`, `max_font_size`, `min_one_line_font`.
 - `POST /api/v1/compile-roster` — deprecated, рендер `templates/roster_template.tex` на сервере.
 - `GET /health` — без ключа: `{"status", "engines": {…}, "lualatex_available", "keys_configured"}`.
 
