@@ -353,8 +353,11 @@ def test_table_signs_custom_template_and_font(client):
         "text_box": [95, 18, 746, 142],
         "max_font_size": 60,
     }
-    r = client.post("/api/v1/table-signs", json=payload,
-                    headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"})
+    r = client.post(
+        "/api/v1/table-signs",
+        json=payload,
+        headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"},
+    )
     assert r.status_code == 200, r.data[:500]
     reader = PyPDF2.PdfReader(io.BytesIO(r.data))
     assert len(reader.pages) == 2
@@ -369,8 +372,9 @@ def test_table_signs_bad_font(client):
         "template_base64": base64.b64encode(_blank_pdf()).decode(),
         "font_base64": base64.b64encode(b"not a font").decode(),
     }
-    r = client.post("/api/v1/table-signs", json=payload,
-                    headers={"Authorization": f"Bearer {KEY_A}"})
+    r = client.post(
+        "/api/v1/table-signs", json=payload, headers={"Authorization": f"Bearer {KEY_A}"}
+    )
     assert r.status_code == 400
     assert "font_base64" in r.get_json()["error"]
 
@@ -382,8 +386,9 @@ def test_table_signs_bad_font_base64(client, font_b64):
         "template_base64": base64.b64encode(_blank_pdf()).decode(),
         "font_base64": font_b64,
     }
-    r = client.post("/api/v1/table-signs", json=payload,
-                    headers={"Authorization": f"Bearer {KEY_A}"})
+    r = client.post(
+        "/api/v1/table-signs", json=payload, headers={"Authorization": f"Bearer {KEY_A}"}
+    )
     assert r.status_code == 400
     assert "font_base64" in r.get_json()["error"]
 
@@ -402,8 +407,11 @@ def test_table_signs_font_not_kept_in_reportlab_registry(client):
         "font_base64": font_b64,
     }
     for _ in range(2):
-        r = client.post("/api/v1/table-signs", json=payload,
-                        headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"})
+        r = client.post(
+            "/api/v1/table-signs",
+            json=payload,
+            headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"},
+        )
         assert r.status_code == 200
     assert not [n for n in pdfmetrics._fonts if n.startswith("SignFont-")]
     assert not [k for k in rl_fonts._ps2tt_map if k.startswith("signfont-")]
@@ -443,8 +451,11 @@ def test_table_signs_font_with_known_postscript_name(client, modules, monkeypatc
         "font_base64": base64.b64encode(_vera_bytes()).decode(),
     }
     monkeypatch.setattr(legacy, "_register_request_font", spy)
-    r = client.post("/api/v1/table-signs", json=payload,
-                    headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"})
+    r = client.post(
+        "/api/v1/table-signs",
+        json=payload,
+        headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"},
+    )
     assert r.status_code == 200
     assert used and used[0] is not server_font
     assert pdfmetrics.getFont("ServerVera") is server_font
@@ -460,6 +471,62 @@ def test_table_signs_font_base64_with_line_breaks(client):
         "template_base64": base64.b64encode(_blank_pdf()).decode(),
         "font_base64": wrapped,
     }
-    r = client.post("/api/v1/table-signs", json=payload,
-                    headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"})
+    r = client.post(
+        "/api/v1/table-signs",
+        json=payload,
+        headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"},
+    )
     assert r.status_code == 200, r.data[:300]
+
+
+def test_table_signs_keep_readers_alive_until_write(client, monkeypatch):
+    """PdfWriter помнит перенесённые объекты по id(reader). Если временный reader соберёт GC,
+    следующий получит тот же id, и в страницу попадут шрифт и объекты чужой команды (каша
+    вместо названия, пропавшие команды). Поэтому к записи каждого PDF все reader'ы, созданные
+    после его PdfWriter, должны быть живы."""
+    import gc
+    import weakref
+
+    import PyPDF2
+
+    created = []
+    dead_at_write = []
+    real_reader_init = PyPDF2.PdfReader.__init__
+    real_writer_init = PyPDF2.PdfWriter.__init__
+    real_write = PyPDF2.PdfWriter.write
+
+    def reader_init(self, *args, **kwargs):
+        real_reader_init(self, *args, **kwargs)
+        created.append(weakref.ref(self))
+
+    def writer_init(self, *args, **kwargs):
+        real_writer_init(self, *args, **kwargs)
+        self._test_readers_from = len(created)
+
+    def write(self, stream):
+        gc.collect()
+        dead_at_write.extend(
+            i
+            for i in range(getattr(self, "_test_readers_from", 0), len(created))
+            if created[i]() is None
+        )
+        return real_write(self, stream)
+
+    monkeypatch.setattr(PyPDF2.PdfReader, "__init__", reader_init)
+    monkeypatch.setattr(PyPDF2.PdfWriter, "__init__", writer_init)
+    monkeypatch.setattr(PyPDF2.PdfWriter, "write", write)
+
+    payload = {
+        "teams": [{"number": i + 1, "name": f"Team {i}"} for i in range(8)],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": base64.b64encode(_vera_bytes()).decode(),
+        "chunk_size": 5,
+    }
+    r = client.post(
+        "/api/v1/table-signs",
+        json=payload,
+        headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"},
+    )
+    assert r.status_code == 200, r.data[:300]
+    assert created
+    assert not dead_at_write

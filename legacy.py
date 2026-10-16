@@ -558,6 +558,11 @@ def generate_table_signs():
         for chunk_idx in range(0, len(teams), chunk_size):
             teams_chunk = teams[chunk_idx:chunk_idx + chunk_size]
             writer = PyPDF2.PdfWriter()
+            # PdfWriter помнит перенесённые объекты по id(reader): если временный reader
+            # соберёт GC, следующий получит тот же id, и в страницу попадут объекты
+            # чужой команды (шрифт с чужими кодами — «каша» вместо названия) или merge
+            # упадёт. Поэтому все reader'ы чанка живут, пока чанк не записан.
+            readers = []
 
             for team in teams_chunk:
                 team_name = team.get('name', '').strip()
@@ -566,12 +571,14 @@ def generate_table_signs():
 
                 try:
                     base_reader = PyPDF2.PdfReader(io.BytesIO(template_bytes))
+                    readers.append(base_reader)
                     page = base_reader.pages[0]
                     pw = float(page.mediabox.width)
                     ph = float(page.mediabox.height)
 
-                    overlay_buf = make_overlay(pw, ph, team_name)
-                    page.merge_page(PyPDF2.PdfReader(overlay_buf).pages[0])
+                    overlay_reader = PyPDF2.PdfReader(make_overlay(pw, ph, team_name))
+                    readers.append(overlay_reader)
+                    page.merge_page(overlay_reader.pages[0])
 
                     step1_buf = io.BytesIO()
                     w1 = PyPDF2.PdfWriter()
@@ -580,6 +587,7 @@ def generate_table_signs():
                     step1_buf.seek(0)
 
                     rotated_reader = PyPDF2.PdfReader(step1_buf)
+                    readers.append(rotated_reader)
                     rp = rotated_reader.pages[0]
                     rw, rh = float(rp.mediabox.width), float(rp.mediabox.height)
                     t = PyPDF2.Transformation().translate(tx=-rw / 2, ty=-rh / 2).rotate(180).translate(tx=rw / 2, ty=rh / 2)
@@ -587,15 +595,17 @@ def generate_table_signs():
                     if "/Rotate" in rp:
                         del rp["/Rotate"]
 
-                    overlay_buf2 = make_overlay(rw, rh, team_name)
-                    rp.merge_page(PyPDF2.PdfReader(overlay_buf2).pages[0])
+                    overlay_reader2 = PyPDF2.PdfReader(make_overlay(rw, rh, team_name))
+                    readers.append(overlay_reader2)
+                    rp.merge_page(overlay_reader2.pages[0])
 
                     writer.add_page(rp)
                     logger.info(f"✓ Table sign for team #{team.get('number', '?')} '{team_name}'")
 
                 except Exception as e:
+                    # Не пропускаем команду молча: PDF без части табличек хуже ошибки
                     logger.error(f"Failed for team '{team_name}': {e}")
-                    continue
+                    raise RuntimeError(f"table sign for team {team_name!r} failed: {e}") from e
 
             if len(writer.pages) == 0:
                 continue
