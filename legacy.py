@@ -369,22 +369,22 @@ def compile_latex():
 TABLE_SIGN_FONT_MAX_BYTES = 10 * 1024 * 1024
 
 
-def _unregister_font(font_name: str) -> None:
-    """Убрать шрифт из глобальных реестров ReportLab: шрифты из запросов живут один запрос,
-    иначе разные font_base64 копились бы в памяти воркера."""
-    from reportlab.lib import fonts as rl_fonts
+def _register_request_font(font_name: str, font) -> None:
+    """Шрифт из запроса — только в pdfmetrics._fonts под своим именем, мимо registerFont:
+    тот ищет уже известный шрифт по PostScript-имени (_dynFaceNames) и при совпадении
+    молча отдал бы под font_name чужой объект (например, серверный PPNeueMachina).
+    Канвасу и stringWidth хватает getFont(font_name)."""
     from reportlab.pdfbase import pdfmetrics as rl_pdfmetrics
 
-    font = rl_pdfmetrics._fonts.pop(font_name, None)
-    if font is None:
-        return
-    for face_name, face_font in list(rl_pdfmetrics._dynFaceNames.items()):
-        if face_font is font:
-            del rl_pdfmetrics._dynFaceNames[face_name]
-    family = font_name.lower()
-    for key in [k for k in rl_fonts._tt2ps_map if k[0] == family]:
-        del rl_fonts._tt2ps_map[key]
-    rl_fonts._ps2tt_map.pop(family, None)
+    rl_pdfmetrics._fonts[font_name] = font
+
+
+def _unregister_font(font_name: str) -> None:
+    """Шрифт из запроса живёт один запрос, иначе разные font_base64 копились бы
+    в памяти воркера."""
+    from reportlab.pdfbase import pdfmetrics as rl_pdfmetrics
+
+    rl_pdfmetrics._fonts.pop(font_name, None)
 
 
 @bp.route('/api/v1/table-signs', methods=['POST'])
@@ -465,11 +465,13 @@ def generate_table_signs():
             try:
                 if not isinstance(font_b64, str):
                     raise TypeError('must be a base64 string')
+                # Переносы строк (base64 по 76 символов, MIME) допустимы, как и в template_base64
+                font_b64 = ''.join(font_b64.split())
                 if len(font_b64) > TABLE_SIGN_FONT_MAX_BYTES * 4 // 3 + 4:
-                    raise ValueError(f'font is larger than {TABLE_SIGN_FONT_MAX_BYTES // (1024 * 1024)} MB')
+                    max_mb = TABLE_SIGN_FONT_MAX_BYTES // (1024 * 1024)
+                    raise ValueError(f'font is larger than {max_mb} MB')
                 font_bytes = base64.b64decode(font_b64, validate=True)
-                font = rl_TTFont(font_name, io.BytesIO(font_bytes))
-                rl_pdfmetrics.registerFont(font)
+                _register_request_font(font_name, rl_TTFont(font_name, io.BytesIO(font_bytes)))
                 custom_font_name = font_name
             except (binascii.Error, TypeError, ValueError, struct.error, IndexError, KeyError,
                     rl_TTFError) as e:

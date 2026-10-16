@@ -408,3 +408,58 @@ def test_table_signs_font_not_kept_in_reportlab_registry(client):
     assert not [n for n in pdfmetrics._fonts if n.startswith("SignFont-")]
     assert not [k for k in rl_fonts._ps2tt_map if k.startswith("signfont-")]
     assert not [f for f in pdfmetrics._dynFaceNames.values() if f.fontName.startswith("SignFont-")]
+
+
+def _vera_bytes():
+    import reportlab
+
+    with open(os.path.join(os.path.dirname(reportlab.__file__), "fonts", "Vera.ttf"), "rb") as f:
+        return f.read()
+
+
+def test_table_signs_font_with_known_postscript_name(client, modules, monkeypatch):
+    """Уже зарегистрированный шрифт с тем же PostScript-именем не подменяет шрифт запроса
+    и не снимается с регистрации после него."""
+    import io
+
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    import legacy
+
+    server_font = TTFont("ServerVera", io.BytesIO(_vera_bytes()))
+    pdfmetrics.registerFont(server_font)
+    used = []
+    real_register = legacy._register_request_font
+
+    def spy(name, font):
+        used.append(font)
+        real_register(name, font)
+        assert pdfmetrics.getFont(name) is font
+
+    payload = {
+        "teams": [{"number": 1, "name": "Team"}],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": base64.b64encode(_vera_bytes()).decode(),
+    }
+    monkeypatch.setattr(legacy, "_register_request_font", spy)
+    r = client.post("/api/v1/table-signs", json=payload,
+                    headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"})
+    assert r.status_code == 200
+    assert used and used[0] is not server_font
+    assert pdfmetrics.getFont("ServerVera") is server_font
+    assert pdfmetrics._dynFaceNames[server_font.face.name] is server_font
+
+
+def test_table_signs_font_base64_with_line_breaks(client):
+    import textwrap
+
+    wrapped = "\n".join(textwrap.wrap(base64.b64encode(_vera_bytes()).decode(), 76))
+    payload = {
+        "teams": [{"number": 1, "name": "Team"}],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": wrapped,
+    }
+    r = client.post("/api/v1/table-signs", json=payload,
+                    headers={"Authorization": f"Bearer {KEY_A}", "Accept": "application/pdf"})
+    assert r.status_code == 200, r.data[:300]
