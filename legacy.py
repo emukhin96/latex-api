@@ -19,6 +19,7 @@ rate limit — по клиенту, а не по IP; компиляция идё
 import base64
 import binascii
 import io
+import math
 import struct
 import uuid
 import re
@@ -480,7 +481,8 @@ def generate_table_signs():
         hall_box = data.get('hall_box')
         if hall_box is not None:
             if (not isinstance(hall_box, list) or len(hall_box) != 4
-                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in hall_box)
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                               for v in hall_box)
                     or hall_box[2] <= hall_box[0] or hall_box[3] <= hall_box[1]):
                 return jsonify({'success': False, 'error': '"hall_box" must be [x1, y1, x2, y2] with x1 < x2, y1 < y2'}), 400
             hall_box = tuple(float(v) for v in hall_box)

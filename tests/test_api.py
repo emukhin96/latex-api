@@ -611,7 +611,16 @@ def test_table_signs_hall_box(client, monkeypatch):
     assert r.status_code == 200 and "BHA" not in drawn
 
 
-BAD_HALL_BOXES = [[1, 2, 3], "box", [10, 10, 5, 20], [1, 2, "3", 4], [0, 0, True, 4]]
+BAD_HALL_BOXES = [
+    [1, 2, 3],
+    "box",
+    [10, 10, 5, 20],
+    [1, 2, "3", 4],
+    [0, 0, True, 4],
+    # JSON-парсер Python принимает NaN и Infinity: в PDF они ушли бы как inf/nan
+    [0, 0, float("inf"), float("inf")],
+    [float("nan"), 0, 10, 10],
+]
 
 
 @pytest.mark.parametrize("hall_box", BAD_HALL_BOXES)
