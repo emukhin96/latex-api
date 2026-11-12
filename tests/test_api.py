@@ -530,3 +530,96 @@ def test_table_signs_keep_readers_alive_until_write(client, monkeypatch):
     assert r.status_code == 200, r.data[:300]
     assert created
     assert not dead_at_write
+
+
+PDF_HEADERS = {**_auth(), "Accept": "application/pdf"}
+
+
+def _vera_path():
+    import reportlab
+
+    return os.path.join(os.path.dirname(reportlab.__file__), "fonts", "Vera.ttf")
+
+
+def _vera_b64():
+    with open(_vera_path(), "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
+def test_cap_ratio_measures_glyph(modules):
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    legacy = sys.modules["legacy"]
+    font = TTFont("VeraCapTest", _vera_path())
+    # У Vera нет sCapHeight (ReportLab подставляет ascent 0.76), а верх «H» — 0.729
+    assert abs(legacy._cap_ratio(font) - 0.729) < 0.002
+    assert legacy._cap_ratio(object()) == legacy.DEFAULT_CAP_RATIO
+
+
+def test_table_signs_name_centred_by_capitals(client, monkeypatch):
+    """Базовая линия однострочного названия — на полвысоты заглавных ниже середины поля."""
+    from reportlab.pdfgen.canvas import Canvas
+
+    calls = []
+    orig = Canvas.drawString
+
+    def spy(self, x, y, text, *a, **kw):
+        calls.append((text, y, self._fontsize))
+        return orig(self, x, y, text, *a, **kw)
+
+    monkeypatch.setattr(Canvas, "drawString", spy)
+    payload = {
+        "teams": [{"number": 1, "name": "HELLO"}],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": _vera_b64(),
+        "text_box": [100, 20, 741, 140],
+        "max_font_size": 60,
+    }
+    r = client.post("/api/v1/table-signs", json=payload, headers=PDF_HEADERS)
+    assert r.status_code == 200, r.data[:500]
+    (text, y, size), _ = calls  # нижняя половина и, после поворота листа, верхняя
+    assert text == "HELLO"
+    assert abs(y + 0.729 * size / 2 - 80) < 0.2
+
+
+def test_table_signs_hall_box(client, monkeypatch):
+    from reportlab.pdfgen.canvas import Canvas
+
+    drawn = []
+    orig = Canvas.drawString
+
+    def spy(self, x, y, text, *a, **kw):
+        drawn.append(text)
+        return orig(self, x, y, text, *a, **kw)
+
+    monkeypatch.setattr(Canvas, "drawString", spy)
+    payload = {
+        "teams": [{"number": 1, "name": "One", "hall": "BHA"}, {"number": 2, "name": "Two"}],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "font_base64": _vera_b64(),
+        "text_box": [100, 20, 741, 140],
+        "hall_box": [764, 20, 828, 140],
+    }
+    r = client.post("/api/v1/table-signs", json=payload, headers=PDF_HEADERS)
+    assert r.status_code == 200, r.data[:500]
+    # Аудитория — на обеих половинах таблички первой команды, у второй её нет
+    assert drawn == ["One", "BHA", "One", "BHA", "Two", "Two"]
+
+    drawn.clear()
+    payload.pop("hall_box")
+    r = client.post("/api/v1/table-signs", json=payload, headers=PDF_HEADERS)
+    assert r.status_code == 200 and "BHA" not in drawn
+
+
+BAD_HALL_BOXES = [[1, 2, 3], "box", [10, 10, 5, 20], [1, 2, "3", 4], [0, 0, True, 4]]
+
+
+@pytest.mark.parametrize("hall_box", BAD_HALL_BOXES)
+def test_table_signs_bad_hall_box(client, hall_box):
+    payload = {
+        "teams": [{"number": 1, "name": "One", "hall": "01"}],
+        "template_base64": base64.b64encode(_blank_pdf()).decode(),
+        "hall_box": hall_box,
+    }
+    r = client.post("/api/v1/table-signs", json=payload, headers=_auth())
+    assert r.status_code == 400 and "hall_box" in r.get_json()["error"]
