@@ -19,6 +19,7 @@ rate limit — по клиенту, а не по IP; компиляция идё
 import base64
 import binascii
 import io
+import math
 import struct
 import uuid
 import re
@@ -387,6 +388,46 @@ def _unregister_font(font_name: str) -> None:
     rl_pdfmetrics._fonts.pop(font_name, None)
 
 
+# Какую часть поля аудитории занимает надпись: вдоль строки и поперёк (по высоте заглавных)
+HALL_FILL_LENGTH = 0.8
+HALL_FILL_THICKNESS = 0.7
+
+# Высота заглавных в долях кегля, если глиф не прочитать: типичная для гротесков
+DEFAULT_CAP_RATIO = 0.7
+
+
+def _cap_ratio(font) -> float:
+    """Высота заглавных шрифта в долях кегля — по верху глифа «Н» (или латинской H).
+
+    Надпись центруется по полосе заглавных, а не по ascent − descent: иначе выносные
+    элементы («р», «у») тянут название вверх на ~0,1 кегля. sCapHeight из OS/2 есть
+    не у всех шрифтов (ReportLab тогда подставляет ascent), поэтому меряем сам глиф."""
+    face = getattr(font, 'face', None)
+    try:
+        for ch in ('Н', 'H'):
+            gid = face.charToGlyph.get(ord(ch))
+            if not gid or face.glyphPos[gid + 1] <= face.glyphPos[gid]:
+                continue
+            face.seek(face.get_table_pos('glyf')[0] + face.glyphPos[gid] + 8)  # yMax в заголовке глифа
+            ratio = face.read_short() / face.unitsPerEm
+            if 0.3 < ratio < 1.2:
+                return ratio
+    except Exception:
+        pass
+    cap = getattr(face, 'capHeight', 0) or 0
+    return cap / 1000 if 300 < cap < 1200 else DEFAULT_CAP_RATIO
+
+
+def _fit_one_line(text, font_name, max_size, box_w, box_h, cap):
+    """Наибольший кегль от max_size вниз, при котором строка влезает в box_w, а заглавные — в box_h."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth as rl_stringWidth
+
+    for size in range(int(max_size), 4, -1):
+        if rl_stringWidth(text, font_name, size) <= box_w and size * cap <= box_h:
+            return size
+    return 4
+
+
 @bp.route('/api/v1/table-signs', methods=['POST'])
 def generate_table_signs():
     """
@@ -403,6 +444,11 @@ def generate_table_signs():
         text_color_rgb: list of 3 floats (optional)
         max_font_size: int (optional)
         font_base64: str (optional, base64 encoded TTF; по умолчанию PPNeueMachina Ultrabold с сервера)
+        hall_box: list of 4 floats [x1, y1, x2, y2] (optional) — поле под аудиторию команды
+            (teams[].hall) в нижней половине листа; надпись повёрнута на 90° и читается снизу
+            вверх, кегль — по полю, не больше max_font_size. Без hall_box teams[].hall не печатается.
+
+    Названия и аудитория центруются по полосе заглавных букв шрифта.
 
     Response JSON:
         success: bool
@@ -432,6 +478,14 @@ def generate_table_signs():
             return jsonify({'success': False, 'error': 'Too many teams (max 200)'}), 400
 
         text_box = tuple(data.get('text_box', [80, 40, 670, 230]))
+        hall_box = data.get('hall_box')
+        if hall_box is not None:
+            if (not isinstance(hall_box, list) or len(hall_box) != 4
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                               for v in hall_box)
+                    or hall_box[2] <= hall_box[0] or hall_box[3] <= hall_box[1]):
+                return jsonify({'success': False, 'error': '"hall_box" must be [x1, y1, x2, y2] with x1 < x2, y1 < y2'}), 400
+            hall_box = tuple(float(v) for v in hall_box)
         text_color = tuple(data.get('text_color_rgb', [0.129, 0.106, 0.404]))
         max_font_size = data.get('max_font_size', 80)
         min_one_line_font = data.get('min_one_line_font', 50)
@@ -490,8 +544,7 @@ def generate_table_signs():
             except KeyError:
                 rl_pdfmetrics.registerFont(rl_TTFont(font_name, str(font_path)))
 
-        ASCENT_RATIO = 0.75
-        DESCENT_RATIO = 0.25
+        cap = _cap_ratio(rl_pdfmetrics.getFont(font_name))
 
         def fit_text(text, bw, bh):
             for size in range(max_font_size, min_one_line_font - 1, -1):
@@ -519,24 +572,32 @@ def generate_table_signs():
             cpl = max(1, int(bw / cw))
             return size, textwrap.wrap(text, width=cpl, break_long_words=False, break_on_hyphens=False)
 
-        def make_overlay(pw, ph, team_name):
+        def make_overlay(pw, ph, team_name, hall=''):
             buf = io.BytesIO()
             c = rl_canvas.Canvas(buf, pagesize=(pw, ph))
             x1, y1, x2, y2 = text_box
             bw, bh = x2 - x1, y2 - y1
             fs, lines = fit_text(team_name, bw, bh)
             c.setFont(font_name, fs)
-            lh = fs
-            total_h = lh + (len(lines) - 1) * lh * line_spacing if len(lines) > 1 else lh
-            mid_y = (y1 + y2) / 2
-            if len(lines) == 1:
-                start_y = mid_y - (ASCENT_RATIO - DESCENT_RATIO) * fs / 2
-            else:
-                start_y = mid_y + total_h / 2 - fs * ASCENT_RATIO
+            step = fs * line_spacing
+            # По центру поля — полоса от верха заглавных первой строки до базовой линии последней
+            block_h = cap * fs + (len(lines) - 1) * step
+            start_y = (y1 + y2) / 2 + block_h / 2 - cap * fs
             c.setFillColorRGB(*text_color)
             for i, line in enumerate(lines):
                 lw = rl_stringWidth(line, font_name, fs)
-                c.drawString(x1 + (bw - lw) / 2, start_y - i * lh * line_spacing, line)
+                c.drawString(x1 + (bw - lw) / 2, start_y - i * step, line)
+            if hall and hall_box:
+                hx1, hy1, hx2, hy2 = hall_box
+                # Поля внутри зоны: надпись не прижимается к её краям и к краю листа
+                hs = _fit_one_line(hall, font_name, max_font_size,
+                                   (hy2 - hy1) * HALL_FILL_LENGTH, (hx2 - hx1) * HALL_FILL_THICKNESS, cap)
+                c.saveState()
+                c.translate((hx1 + hx2) / 2, (hy1 + hy2) / 2)
+                c.rotate(90)  # читается снизу вверх, верх букв — к названию
+                c.setFont(font_name, hs)
+                c.drawString(-rl_stringWidth(hall, font_name, hs) / 2, -cap * hs / 2, hall)
+                c.restoreState()
             c.save()
             buf.seek(0)
             return buf
@@ -568,6 +629,7 @@ def generate_table_signs():
                 team_name = team.get('name', '').strip()
                 if not team_name:
                     continue
+                hall = str(team.get('hall') or '').strip()
 
                 try:
                     base_reader = PyPDF2.PdfReader(io.BytesIO(template_bytes))
@@ -576,7 +638,7 @@ def generate_table_signs():
                     pw = float(page.mediabox.width)
                     ph = float(page.mediabox.height)
 
-                    overlay_reader = PyPDF2.PdfReader(make_overlay(pw, ph, team_name))
+                    overlay_reader = PyPDF2.PdfReader(make_overlay(pw, ph, team_name, hall))
                     readers.append(overlay_reader)
                     page.merge_page(overlay_reader.pages[0])
 
@@ -595,7 +657,7 @@ def generate_table_signs():
                     if "/Rotate" in rp:
                         del rp["/Rotate"]
 
-                    overlay_reader2 = PyPDF2.PdfReader(make_overlay(rw, rh, team_name))
+                    overlay_reader2 = PyPDF2.PdfReader(make_overlay(rw, rh, team_name, hall))
                     readers.append(overlay_reader2)
                     rp.merge_page(overlay_reader2.pages[0])
 
